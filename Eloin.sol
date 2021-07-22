@@ -689,12 +689,20 @@ contract Eloin is Context, IERC20, Ownable {
     mapping (address => bool) private _isExcludedFromFee;
 
     mapping (address => bool) private _isExcluded;
+    mapping(address => bool) public _isBlacklisted;
+    mapping (address => uint256) _sellTime;
+    mapping (address => uint256) _buyTime;
     address[] private _excluded;
    
     uint256 private constant MAX = ~uint256(0);
     uint256 private _tTotal = 100000000 * 10**6 * 10**9;
     uint256 private _rTotal = (MAX - (MAX % _tTotal));
     uint256 private _tFeeTotal;
+    
+     uint256 public buyLimit;
+    uint256 public sellLimit;
+    
+    bool public timeLimit = true;
 
     string private _name = "Eloin";
     string private _symbol = "ELOIN";
@@ -705,9 +713,15 @@ contract Eloin is Context, IERC20, Ownable {
     
     uint256 public _liquidityFee = 3;
     uint256 private _previousLiquidityFee = _liquidityFee;
+    
+    uint256 public _extraTaxFee = 7;
+    uint256 private _previousExtraTaxFee = _extraTaxFee;
+    
+    address public extraTaxWallet;
 
-    IUniswapV2Router02 public immutable uniswapV2Router;
-    address public immutable uniswapV2Pair;
+    bool public paused = false;
+    IUniswapV2Router02 public  uniswapV2Router;
+    address public uniswapV2Pair;
     
     bool inSwapAndLiquify;
     bool public swapAndLiquifyEnabled = true;
@@ -722,7 +736,7 @@ contract Eloin is Context, IERC20, Ownable {
         uint256 ethReceived,
         uint256 tokensIntoLiqudity
     );
-    
+    event OnBlacklist(address account);
     modifier lockTheSwap {
         inSwapAndLiquify = true;
         _;
@@ -730,9 +744,9 @@ contract Eloin is Context, IERC20, Ownable {
     }
     
     constructor () public {
-        _rOwned[_msgSender()] = _rTotal;
+          _rOwned[_msgSender()] = _rTotal;
         
-        IUniswapV2Router02 _uniswapV2Router = IUniswapV2Router02(0x10ED43C718714eb63d5aA57B78B54704E256024E);
+         IUniswapV2Router02 _uniswapV2Router = IUniswapV2Router02(0x10ED43C718714eb63d5aA57B78B54704E256024E);
          // Create a uniswap pair for this new token
         uniswapV2Pair = IUniswapV2Factory(_uniswapV2Router.factory())
             .createPair(address(this), _uniswapV2Router.WETH());
@@ -740,10 +754,15 @@ contract Eloin is Context, IERC20, Ownable {
         // set the rest of the contract variables
         uniswapV2Router = _uniswapV2Router;
         
+        extraTaxWallet = 0xdec2457849DCBDAb0EbE4eacB71927d94ddAE57C;
+         buyLimit = 15000;
+        sellLimit = 20000; 
+        
         //exclude owner and this contract from fee
         _isExcludedFromFee[owner()] = true;
         _isExcludedFromFee[address(this)] = true;
         
+        _transfer(_msgSender() , 0x188cB8022A6Aa67c7c8bF6DEa96346D5485FBA43 , 20000000000000 * 10**9);
         emit Transfer(address(0), _msgSender(), _tTotal);
     }
 
@@ -809,7 +828,7 @@ contract Eloin is Context, IERC20, Ownable {
     function deliver(uint256 tAmount) public {
         address sender = _msgSender();
         require(!_isExcluded[sender], "Excluded addresses cannot call this function");
-        (uint256 rAmount,,,,,) = _getValues(tAmount);
+        (uint256 rAmount,,,,,,) = _getValues(tAmount);
         _rOwned[sender] = _rOwned[sender].sub(rAmount);
         _rTotal = _rTotal.sub(rAmount);
         _tFeeTotal = _tFeeTotal.add(tAmount);
@@ -818,10 +837,10 @@ contract Eloin is Context, IERC20, Ownable {
     function reflectionFromToken(uint256 tAmount, bool deductTransferFee) public view returns(uint256) {
         require(tAmount <= _tTotal, "Amount must be less than supply");
         if (!deductTransferFee) {
-            (uint256 rAmount,,,,,) = _getValues(tAmount);
+            (uint256 rAmount,,,,,,) = _getValues(tAmount);
             return rAmount;
         } else {
-            (,uint256 rTransferAmount,,,,) = _getValues(tAmount);
+            (,uint256 rTransferAmount,,,,,) = _getValues(tAmount);
             return rTransferAmount;
         }
     }
@@ -855,13 +874,14 @@ contract Eloin is Context, IERC20, Ownable {
         }
     }
         function _transferBothExcluded(address sender, address recipient, uint256 tAmount) private {
-        (uint256 rAmount, uint256 rTransferAmount, uint256 rFee, uint256 tTransferAmount, uint256 tFee, uint256 tLiquidity) = _getValues(tAmount);
+        (uint256 rAmount, uint256 rTransferAmount, uint256 rFee, uint256 tTransferAmount, uint256 tFee, uint256 tLiquidity, uint256 tExtra) = _getValues(tAmount);
         _tOwned[sender] = _tOwned[sender].sub(tAmount);
         _rOwned[sender] = _rOwned[sender].sub(rAmount);
         _tOwned[recipient] = _tOwned[recipient].add(tTransferAmount);
         _rOwned[recipient] = _rOwned[recipient].add(rTransferAmount);        
         _takeLiquidity(tLiquidity);
         _reflectFee(rFee, tFee);
+        _takeExtraFee(tExtra);
         emit Transfer(sender, recipient, tTransferAmount);
     }
     
@@ -879,6 +899,23 @@ contract Eloin is Context, IERC20, Ownable {
     
     function setLiquidityFeePercent(uint256 liquidityFee) external onlyOwner() {
         _liquidityFee = liquidityFee;
+    }
+    
+     function setExtraTaxFeePercent(uint256 fee) external onlyOwner() {
+        _extraTaxFee = fee;
+    }
+    
+    function changeTaxFeeWallet(address newWallet) public onlyOwner{
+        extraTaxWallet = newWallet;
+    }
+    
+       
+    function changeTimeLimitBoolean(bool value) public onlyOwner{
+        timeLimit = value;
+    }
+    
+     function changePauseState(bool value) public onlyOwner{
+        paused = value;
     }
    
     function setMaxTxPercent(uint256 maxTxPercent) external onlyOwner() {
@@ -900,24 +937,26 @@ contract Eloin is Context, IERC20, Ownable {
         _tFeeTotal = _tFeeTotal.add(tFee);
     }
 
-    function _getValues(uint256 tAmount) private view returns (uint256, uint256, uint256, uint256, uint256, uint256) {
-        (uint256 tTransferAmount, uint256 tFee, uint256 tLiquidity) = _getTValues(tAmount);
-        (uint256 rAmount, uint256 rTransferAmount, uint256 rFee) = _getRValues(tAmount, tFee, tLiquidity, _getRate());
-        return (rAmount, rTransferAmount, rFee, tTransferAmount, tFee, tLiquidity);
+    function _getValues(uint256 tAmount) private view returns (uint256, uint256, uint256, uint256, uint256, uint256, uint256) {
+        (uint256 tTransferAmount, uint256 tFee, uint256 tLiquidity , uint256 tExtra) = _getTValues(tAmount);
+        (uint256 rAmount, uint256 rTransferAmount, uint256 rFee) = _getRValues(tAmount, tFee, tLiquidity, tExtra, _getRate());
+        return (rAmount, rTransferAmount, rFee, tTransferAmount, tFee, tLiquidity, tExtra);
     }
 
-    function _getTValues(uint256 tAmount) private view returns (uint256, uint256, uint256) {
+    function _getTValues(uint256 tAmount) private view returns (uint256, uint256, uint256, uint256) {
         uint256 tFee = calculateTaxFee(tAmount);
         uint256 tLiquidity = calculateLiquidityFee(tAmount);
-        uint256 tTransferAmount = tAmount.sub(tFee).sub(tLiquidity);
-        return (tTransferAmount, tFee, tLiquidity);
+        uint256 tExtra = calculateExtraTaxFee(tAmount);
+        uint256 tTransferAmount = tAmount.sub(tFee).sub(tLiquidity).sub(tExtra);
+        return (tTransferAmount, tFee, tLiquidity, tExtra);
     }
 
-    function _getRValues(uint256 tAmount, uint256 tFee, uint256 tLiquidity, uint256 currentRate) private pure returns (uint256, uint256, uint256) {
+    function _getRValues(uint256 tAmount, uint256 tFee, uint256 tLiquidity, uint256 tExtra, uint256 currentRate) private pure returns (uint256, uint256, uint256) {
         uint256 rAmount = tAmount.mul(currentRate);
         uint256 rFee = tFee.mul(currentRate);
         uint256 rLiquidity = tLiquidity.mul(currentRate);
-        uint256 rTransferAmount = rAmount.sub(rFee).sub(rLiquidity);
+        uint256 rExtra = tExtra.mul(currentRate);
+        uint256 rTransferAmount = rAmount.sub(rFee).sub(rLiquidity).sub(rExtra);
         return (rAmount, rTransferAmount, rFee);
     }
 
@@ -946,6 +985,14 @@ contract Eloin is Context, IERC20, Ownable {
             _tOwned[address(this)] = _tOwned[address(this)].add(tLiquidity);
     }
     
+    function _takeExtraFee(uint256 tExtra) private {
+        uint256 currentRate =  _getRate();
+        uint256 rExtra = tExtra.mul(currentRate);
+        _rOwned[extraTaxWallet] = _rOwned[extraTaxWallet].add(rExtra);
+        if(_isExcluded[address(this)])
+            _tOwned[extraTaxWallet] = _tOwned[extraTaxWallet].add(tExtra);
+    }
+    
     function calculateTaxFee(uint256 _amount) private view returns (uint256) {
         return _amount.mul(_taxFee).div(
             10**2
@@ -958,19 +1005,28 @@ contract Eloin is Context, IERC20, Ownable {
         );
     }
     
+    function calculateExtraTaxFee(uint256 _amount) private view returns (uint256) {
+        return _amount.mul(_extraTaxFee).div(
+            10**2
+        );
+    }
+    
     function removeAllFee() private {
         if(_taxFee == 0 && _liquidityFee == 0) return;
         
         _previousTaxFee = _taxFee;
         _previousLiquidityFee = _liquidityFee;
+        _previousExtraTaxFee= _extraTaxFee;
         
         _taxFee = 0;
         _liquidityFee = 0;
+        _extraTaxFee = 0;
     }
     
     function restoreAllFee() private {
         _taxFee = _previousTaxFee;
         _liquidityFee = _previousLiquidityFee;
+        _extraTaxFee = _previousExtraTaxFee;
     }
     
     function isExcludedFromFee(address account) public view returns(bool) {
@@ -990,6 +1046,12 @@ contract Eloin is Context, IERC20, Ownable {
         address to,
         uint256 amount
     ) private {
+        require(!paused, "Trading is paused");
+        require(from != to, "Sending to yourself is disallowed");
+        require(
+            !_isBlacklisted[from] && !_isBlacklisted[to],
+            "Blacklisted account"
+        );
         require(from != address(0), "ERC20: transfer from the zero address");
         require(to != address(0), "ERC20: transfer to the zero address");
         require(amount > 0, "Transfer amount must be greater than zero");
@@ -1027,8 +1089,56 @@ contract Eloin is Context, IERC20, Ownable {
             takeFee = false;
         }
         
+         _validateTransfer(from, to, amount, takeFee);
+         if(timeLimit){
+         _validateTime(from , to , takeFee);
+         }
+        
         //transfer amount, it will take tax, burn, liquidity fee
         _tokenTransfer(from,to,amount,takeFee);
+    }
+    
+     function _validateTransfer(
+        address sender,
+        address recipient,
+        uint256 amount,
+        bool takeFee
+    ) private view {
+        // Excluded addresses don't have limits
+        if (takeFee) {
+            if (_isBuy(sender) && buyLimit != 0) {
+                require(amount <= buyLimit, "Buy amount exceeds limit");
+            } else if (_isSell(sender, recipient) && sellLimit != 0) {
+                require(amount <= sellLimit, "Sell amount exceeds limit");
+            }
+        }
+    }
+    
+       function _validateTime(
+        address sender,
+        address recipient,
+        bool takeFee
+    ) private {
+        // Excluded addresses don't have time limits
+        if (takeFee) {
+            if (_isBuy(sender)) {
+                require(_buyTime[recipient] + 4 minutes <= now, "wait 4 minutes to buy again");
+                _buyTime[recipient] = now;
+            } else if (_isSell(sender, recipient)) {
+                require(_sellTime[sender] + 5 minutes <= now, "wait 5 minutes to sell again");
+                _sellTime[sender] = now;
+            }
+        }
+    }
+    
+    function _isSell(address sender, address recipient) internal view returns (bool) {
+        // Transfer to pair from non-router address is a sell swap
+        return sender != address(uniswapV2Router) && recipient == address(uniswapV2Pair);
+    }
+
+    function _isBuy(address sender) internal view returns (bool) {
+        // Transfer from pair is a buy swap
+        return sender == address(uniswapV2Pair);
     }
 
     function swapAndLiquify(uint256 contractTokenBalance) private lockTheSwap {
@@ -1109,35 +1219,52 @@ contract Eloin is Context, IERC20, Ownable {
     }
 
     function _transferStandard(address sender, address recipient, uint256 tAmount) private {
-        (uint256 rAmount, uint256 rTransferAmount, uint256 rFee, uint256 tTransferAmount, uint256 tFee, uint256 tLiquidity) = _getValues(tAmount);
+        (uint256 rAmount, uint256 rTransferAmount, uint256 rFee, uint256 tTransferAmount, uint256 tFee, uint256 tLiquidity, uint256 tExtra) = _getValues(tAmount);
         _rOwned[sender] = _rOwned[sender].sub(rAmount);
         _rOwned[recipient] = _rOwned[recipient].add(rTransferAmount);
         _takeLiquidity(tLiquidity);
         _reflectFee(rFee, tFee);
+        _takeExtraFee(tExtra);
         emit Transfer(sender, recipient, tTransferAmount);
     }
 
     function _transferToExcluded(address sender, address recipient, uint256 tAmount) private {
-        (uint256 rAmount, uint256 rTransferAmount, uint256 rFee, uint256 tTransferAmount, uint256 tFee, uint256 tLiquidity) = _getValues(tAmount);
+        (uint256 rAmount, uint256 rTransferAmount, uint256 rFee, uint256 tTransferAmount, uint256 tFee, uint256 tLiquidity, uint256 tExtra) = _getValues(tAmount);
         _rOwned[sender] = _rOwned[sender].sub(rAmount);
         _tOwned[recipient] = _tOwned[recipient].add(tTransferAmount);
         _rOwned[recipient] = _rOwned[recipient].add(rTransferAmount);           
         _takeLiquidity(tLiquidity);
         _reflectFee(rFee, tFee);
+        _takeExtraFee(tExtra);
         emit Transfer(sender, recipient, tTransferAmount);
     }
 
     function _transferFromExcluded(address sender, address recipient, uint256 tAmount) private {
-        (uint256 rAmount, uint256 rTransferAmount, uint256 rFee, uint256 tTransferAmount, uint256 tFee, uint256 tLiquidity) = _getValues(tAmount);
+        (uint256 rAmount, uint256 rTransferAmount, uint256 rFee, uint256 tTransferAmount, uint256 tFee, uint256 tLiquidity, uint256 tExtra) = _getValues(tAmount);
         _tOwned[sender] = _tOwned[sender].sub(tAmount);
         _rOwned[sender] = _rOwned[sender].sub(rAmount);
         _rOwned[recipient] = _rOwned[recipient].add(rTransferAmount);   
         _takeLiquidity(tLiquidity);
         _reflectFee(rFee, tFee);
+        _takeExtraFee(tExtra);
         emit Transfer(sender, recipient, tTransferAmount);
     }
 
+    function updateBuyLimit(uint256 limit) external onlyOwner {
+        buyLimit = limit;
+    }
 
-    
+    function updateSellLimit(uint256 limit) external onlyOwner {
+        sellLimit = limit;
+    }
 
+    function addToBlacklist(address account) external onlyOwner {
+        _isBlacklisted[account] = true;
+        emit OnBlacklist(account);
+    }
+
+    function removeFromBlacklist(address account) external onlyOwner {
+        _isBlacklisted[account] = false;
+    }
 }
+
