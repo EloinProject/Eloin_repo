@@ -1089,11 +1089,6 @@ contract Eloin is Context, IERC20, Ownable {
             takeFee = false;
         }
         
-         _validateTransfer(from, to, amount, takeFee);
-         if(timeLimit){
-         _validateTime(from , to , takeFee);
-         }
-        
         //transfer amount, it will take tax, burn, liquidity fee
         _tokenTransfer(from,to,amount,takeFee);
     }
