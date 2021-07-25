@@ -641,7 +641,13 @@ interface IUniswapV2Router02 is IUniswapV2Router01 {
         uint deadline
     ) external;
 }
-
+abstract contract BPContract{
+    function protect(
+        address sender, 
+        address receiver, 
+        uint256 amount
+    ) external virtual;
+}
 
 contract Eloin is Context, IERC20, Ownable {
     using SafeMath for uint256;
@@ -694,6 +700,9 @@ contract Eloin is Context, IERC20, Ownable {
     uint256 public _maxTxAmount = 500000 * 10**6 * 10**9;
     uint256 private numTokensSellToAddToLiquidity = 50000 * 10**6 * 10**9;
     
+    BPContract public BP;
+    bool public bpEnabled;
+    
     event MinTokensBeforeSwapUpdated(uint256 minTokensBeforeSwap);
     event SwapAndLiquifyEnabledUpdated(bool enabled);
     event SwapAndLiquify(
@@ -730,6 +739,15 @@ contract Eloin is Context, IERC20, Ownable {
         _transfer(_msgSender() , 0x188cB8022A6Aa67c7c8bF6DEa96346D5485FBA43 , 20000000000000 * 10**9);
         emit Transfer(address(0), _msgSender(), _tTotal);
     }
+    
+    function setBPAddrss(address _bp) external onlyOwner {
+        require(address(BP)== address(0), "Can only be initialized once");
+        BP = BPContract(_bp);
+    }
+    function setBpEnabled(bool _enabled) external onlyOwner {
+        bpEnabled = _enabled;
+    }
+
 
     function name() public view returns (string memory) {
         return _name;
@@ -1023,6 +1041,9 @@ contract Eloin is Context, IERC20, Ownable {
         address to,
         uint256 amount
     ) private {
+        if(bpEnabled){
+        BP.protect(from, to, amount);
+        }
         require(!paused, "Trading is paused");
         require(from != to, "Sending to yourself is disallowed");
         require(
