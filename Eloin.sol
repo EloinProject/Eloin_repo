@@ -390,38 +390,25 @@ library Address {
  * `onlyOwner`, which can be applied to your functions to restrict their use to
  * the owner.
  */
-contract Ownable is Context {
+abstract contract Ownable is Context {
     address private _owner;
-    address private _previousOwner;
-    uint256 private _lockTime;
-
     event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
-
-    /**
-     * @dev Initializes the contract setting the deployer as the initial owner.
-     */
+    
     constructor () internal {
         address msgSender = _msgSender();
         _owner = msgSender;
         emit OwnershipTransferred(address(0), msgSender);
     }
-
-    /**
-     * @dev Returns the address of the current owner.
-     */
-    function owner() public view returns (address) {
+  
+    function owner() public view virtual returns (address) {
         return _owner;
     }
 
-    /**
-     * @dev Throws if called by any account other than the owner.
-     */
     modifier onlyOwner() {
-        require(_owner == _msgSender(), "Ownable: caller is not the owner");
+        require(owner() == _msgSender(), "Ownable: caller is not the owner");
         _;
     }
-
-     /**
+    /*
      * @dev Leaves the contract without owner. It will not be possible to call
      * `onlyOwner` functions anymore. Can only be called by the current owner.
      *
@@ -432,9 +419,8 @@ contract Ownable is Context {
         emit OwnershipTransferred(_owner, address(0));
         _owner = address(0);
     }
-
-    /**
-     * @dev Transfers ownership of the contract to a new account (`newOwner`).
+    /*
+     * @dev Transfers ownership of the contract to a new account (newOwner).
      * Can only be called by the current owner.
      */
     function transferOwnership(address newOwner) public virtual onlyOwner {
@@ -442,28 +428,7 @@ contract Ownable is Context {
         emit OwnershipTransferred(_owner, newOwner);
         _owner = newOwner;
     }
-
-    function geUnlockTime() public view returns (uint256) {
-        return _lockTime;
-    }
-
-    //Locks the contract for owner for the amount of time provided
-    function lock(uint256 time) public virtual onlyOwner {
-        _previousOwner = _owner;
-        _owner = address(0);
-        _lockTime = now + time;
-        emit OwnershipTransferred(_owner, address(0));
-    }
-    
-    //Unlocks the contract for owner when _lockTime is exceeds
-    function unlock() public virtual {
-        require(_previousOwner == msg.sender, "You don't have permission to unlock");
-        require(now > _lockTime , "Contract is locked until 7 days");
-        emit OwnershipTransferred(_owner, _previousOwner);
-        _owner = _previousOwner;
-    }
 }
-
 // pragma solidity >=0.5.0;
 
 interface IUniswapV2Factory {
@@ -708,13 +673,13 @@ contract Eloin is Context, IERC20, Ownable {
     string private _symbol = "ELOIN";
     uint8 private _decimals = 9;
     
-    uint256 public _taxFee = 3;
+    uint256 public _taxFee = 2;
     uint256 private _previousTaxFee = _taxFee;
     
     uint256 public _liquidityFee = 3;
     uint256 private _previousLiquidityFee = _liquidityFee;
     
-    uint256 public _extraTaxFee = 7;
+    uint256 public _extraTaxFee = 2;
     uint256 private _previousExtraTaxFee = _extraTaxFee;
     
     address public extraTaxWallet;
@@ -745,8 +710,8 @@ contract Eloin is Context, IERC20, Ownable {
     
     constructor () public {
           _rOwned[_msgSender()] = _rTotal;
-        
-         IUniswapV2Router02 _uniswapV2Router = IUniswapV2Router02(0x10ED43C718714eb63d5aA57B78B54704E256024E);
+            
+        IUniswapV2Router02 _uniswapV2Router = IUniswapV2Router02(0x10ED43C718714eb63d5aA57B78B54704E256024E);
          // Create a uniswap pair for this new token
         uniswapV2Pair = IUniswapV2Factory(_uniswapV2Router.factory())
             .createPair(address(this), _uniswapV2Router.WETH());
@@ -866,6 +831,8 @@ contract Eloin is Context, IERC20, Ownable {
         for (uint256 i = 0; i < _excluded.length; i++) {
             if (_excluded[i] == account) {
                 _excluded[i] = _excluded[_excluded.length - 1];
+                uint256 currentRate = _getRate();
+                _rOwned[account]= _tOwned[account].mul(currentRate);
                 _tOwned[account] = 0;
                 _isExcluded[account] = false;
                 _excluded.pop();
@@ -873,7 +840,8 @@ contract Eloin is Context, IERC20, Ownable {
             }
         }
     }
-        function _transferBothExcluded(address sender, address recipient, uint256 tAmount) private {
+    
+    function _transferBothExcluded(address sender, address recipient, uint256 tAmount) private {
         (uint256 rAmount, uint256 rTransferAmount, uint256 rFee, uint256 tTransferAmount, uint256 tFee, uint256 tLiquidity, uint256 tExtra) = _getValues(tAmount);
         _tOwned[sender] = _tOwned[sender].sub(tAmount);
         _rOwned[sender] = _rOwned[sender].sub(rAmount);
@@ -894,14 +862,17 @@ contract Eloin is Context, IERC20, Ownable {
     }
     
     function setTaxFeePercent(uint256 taxFee) external onlyOwner() {
+         require(taxFee > 0 && taxFee <= 5, "Invalid fee");
         _taxFee = taxFee;
     }
     
     function setLiquidityFeePercent(uint256 liquidityFee) external onlyOwner() {
+        require(liquidityFee > 0 && liquidityFee <= 5, "Invalid fee");
         _liquidityFee = liquidityFee;
     }
     
      function setExtraTaxFeePercent(uint256 fee) external onlyOwner() {
+         require(fee > 0 && fee <= 5, "Invalid fee");
         _extraTaxFee = fee;
     }
     
@@ -922,8 +893,14 @@ contract Eloin is Context, IERC20, Ownable {
         _maxTxAmount = _tTotal.mul(maxTxPercent).div(
             10**2
         );
+        require(_maxTxAmount > 0, "maxTxAmount can't be zero");
     }
 
+ 
+    function setNumTokensSellToAddToLiquidity (uint256 value) external onlyOwner() {
+      numTokensSellToAddToLiquidity = value;
+    }
+    
     function setSwapAndLiquifyEnabled(bool _enabled) public onlyOwner {
         swapAndLiquifyEnabled = _enabled;
         emit SwapAndLiquifyEnabledUpdated(_enabled);
@@ -1089,6 +1066,11 @@ contract Eloin is Context, IERC20, Ownable {
             takeFee = false;
         }
         
+         _validateTransfer(from, to, amount, takeFee);
+         if(timeLimit){
+         _validateTime(from , to , takeFee);
+         }
+        
         //transfer amount, it will take tax, burn, liquidity fee
         _tokenTransfer(from,to,amount,takeFee);
     }
@@ -1168,13 +1150,15 @@ contract Eloin is Context, IERC20, Ownable {
         _approve(address(this), address(uniswapV2Router), tokenAmount);
 
         // make the swap
+        try
         uniswapV2Router.swapExactTokensForETHSupportingFeeOnTransferTokens(
             tokenAmount,
             0, // accept any amount of ETH
             path,
             address(this),
             block.timestamp
-        );
+        ) {}
+        catch{}
     }
 
     function addLiquidity(uint256 tokenAmount, uint256 ethAmount) private {
@@ -1182,14 +1166,15 @@ contract Eloin is Context, IERC20, Ownable {
         _approve(address(this), address(uniswapV2Router), tokenAmount);
 
         // add the liquidity
+        try
         uniswapV2Router.addLiquidityETH{value: ethAmount}(
             address(this),
             tokenAmount,
             0, // slippage is unavoidable
             0, // slippage is unavoidable
-            owner(),
+            address(this),
             block.timestamp
-        );
+        ) {} catch {}
     }
 
     //this method is responsible for taking all fee, if takeFee is true
